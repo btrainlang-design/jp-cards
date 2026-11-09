@@ -268,6 +268,10 @@ button{font:inherit;color:inherit;cursor:pointer}
 .deck.next{background:var(--surface-2);box-shadow:inset 0 2px 6px rgba(27,33,64,.08);cursor:default}
 .deck.next b{font-size:15px;color:var(--ink-soft)}
 .confirm.soft{background:var(--surface-2)}
+.confirm input[type=password]{width:100%;border:0;border-radius:14px;padding:14px;min-height:48px;background:var(--surface);color:var(--ink);font:15px ui-monospace,Menlo,monospace;box-shadow:inset 0 2px 5px rgba(27,33,64,.10)}
+a.link{text-decoration:none}
+#syStatus b{color:var(--hit);font-weight:600}
+#syStatus b.warn{color:var(--miss)}
 .confirm textarea{width:100%;border:0;border-radius:14px;padding:12px 14px;background:var(--surface);color:var(--ink);font:12.5px/1.5 ui-monospace,Menlo,monospace;resize:vertical;box-shadow:inset 0 2px 5px rgba(27,33,64,.10);word-break:break-all}
 .btn.small{min-height:46px;padding:10px 18px;font-size:15px}
 .toast{pointer-events:none;position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));transform:translate(-50%,20px);opacity:0;
@@ -438,6 +442,25 @@ button{font:inherit;color:inherit;cursor:pointer}
     </div>
     <p class="note" id="bkNote"></p>
   </section>
+
+  <section class="panel sect" aria-labelledby="syh">
+    <h2 id="syh">자동 동기화</h2>
+    <p class="note" id="syStatus">휴대폰과 컴퓨터의 진도를 대표님 GitHub 계정의 비공개 메모장에 자동으로 맞춰 둬요.</p>
+    <div class="pillrow" id="syOffRow"><button class="pill" id="syOn">자동 동기화 켜기</button></div>
+    <div class="pillrow" id="syOnRow" hidden><button class="pill" id="syNow">지금 맞추기</button></div>
+    <button class="link" id="syOff" hidden><span class="arrow"><svg width="16" height="16"><use href="#i-x"/></svg></span>이 기기에서 동기화 끄기</button>
+    <div class="confirm soft" id="syBox" hidden>
+      <p>GitHub에서 메모장 권한만 있는 열쇠를 만든 뒤 아래에 붙여 넣으세요. 열쇠는 이 기기 안에만 저장되고 백업 코드에도 들어가지 않아요.</p>
+      <a class="link" id="syMake" href="https://github.com/settings/tokens/new?scopes=gist&amp;description=jp-cards-sync" target="_blank" rel="noopener"><span class="arrow"><svg width="16" height="16"><use href="#i-right"/></svg></span>GitHub에서 열쇠 만들기</a>
+      <label for="syToken" class="vh">GitHub 열쇠</label>
+      <input id="syToken" type="password" placeholder="ghp_ 로 시작하는 열쇠" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <div class="confirm-row">
+        <button class="btn btn-primary small" id="syGo">연결하기</button>
+        <button class="link" id="syCancel">닫기</button>
+      </div>
+    </div>
+  </section>
+</main>
 </main>
 
 <section id="study" hidden>
@@ -504,7 +527,7 @@ const SETKEYS=["dir","voice","auto","rest"];
 let G={v:2,deck:null,known:[],settings:{dir:"ko",voice:"ai",auto:true,rest:true},decks:{}};
 try{const l=JSON.parse(localStorage.getItem(KEY)||"null");if(l&&l.v===2&&l.decks)G=Object.assign(G,l)}catch(e){}
 function freshDeck(){return {order:shuffle(CARDS.map(c=>c.id)),stage:1,lap:1,stamps:{},stats:{},per:10,session:null,updatedAt:0}}
-function bindSettings(o){SETKEYS.forEach(k=>{delete o[k];Object.defineProperty(o,k,{get:()=>G.settings[k],set:v=>{G.settings[k]=v},enumerable:false,configurable:true})});return o}
+function bindSettings(o){SETKEYS.forEach(k=>{delete o[k];Object.defineProperty(o,k,{get:()=>G.settings[k],set:v=>{G.settings[k]=v;G.settingsAt=Date.now()},enumerable:false,configurable:true})});return o}
 let S=null;
 function openDeckState(id){
   let d=G.decks[id];
@@ -518,9 +541,10 @@ function openDeckState(id){
 }
 const lvl = u => u>=5?4:Math.min(u,3);
 const st = id => S.stats[id] || (S.stats[id]={u:0,k:0,s:0});
+function persist(){try{localStorage.setItem(KEY,JSON.stringify(G))}catch(e){}}
 function save(){
   if(S)S.updatedAt=Date.now();
-  try{localStorage.setItem(KEY,JSON.stringify(G))}catch(e){}
+  persist();schedulePush();
 }
 
 /* ---------- helpers ---------- */
@@ -642,7 +666,7 @@ function startMissed(ids){S.session={kind:"again",queue:shuffle(ids),i:0,hit:0,m
 /* ---------- study ---------- */
 let cardEl=null,flipped=false,busy=false;
 function openStudy(){show("study");renderCard()}
-$("quit").onclick=()=>{stopSpeak();save();show("home");renderHome();toast("진도를 저장했어요. 다음에 이어서 볼 수 있어요")};
+$("quit").onclick=()=>{setTimeout(()=>Sync.push(),50);stopSpeak();save();show("home");renderHome();toast("진도를 저장했어요. 다음에 이어서 볼 수 있어요")};
 function sesLabel(s){return s.kind==="stage"?`${s.stage}번 역`:s.kind==="review"?`모름 ${s.th}번 이상`:"방금 몰랐던 카드"}
 function updateTop(){
   const s=S.session;$("setname").innerHTML=`${sesLabel(s)}<small>${s.kind==="stage"?kan(s.stage)+"の駅":"다시 보기"}</small>`;
@@ -833,11 +857,11 @@ async function loadDeck(id){
   RAW=j.cards;NOTES=j.notes||[];PMAP=j.pmap||[];PATTERNS=j.patterns||{};
   CARDS=RAW.map((c,i)=>({id:i,cat:c[0],ko:c[1],ja:c[2],kana:c[3],t:c[4],guess:!!c[5],listen:/\((직원|안내)\)/.test(c[1])}));
   N=CARDS.length;listCat="전체";
-  openDeckState(DECK.id);save();
+  openDeckState(DECK.id);persist();
   loadVoice(curVoice());
 }
 async function switchDeck(id){
-  stopSpeak();save();
+  stopSpeak();persist();
   try{await loadDeck(id);renderHome();window.scrollTo(0,0);toast(`「${DECK.title}」 테마로 바꿨어요. 진도는 테마마다 따로 저장돼요`)}
   catch(e){toast("이 테마는 아직 이 기기에 내려받지 못했어요. 인터넷에 연결된 상태에서 한 번 열어 주세요")}
 }
@@ -845,6 +869,7 @@ async function boot(){
   try{const idx=await fetchJSON("decks/index.json?t="+Date.now());DECKS=idx.decks||[]}catch(e){}
   if(!DECKS.length){try{const idx=await fetchJSON("decks/index.json");DECKS=idx.decks||[]}catch(e){}}
   if(!DECKS.length){$("status").textContent="카드 목록을 불러오지 못했어요. 처음 한 번은 인터넷 연결이 필요해요.";return}
+  await Sync.pull(true);
   const fresh=DECKS.filter(d=>G.known.length&&!G.known.includes(d.id));
   G.known=DECKS.map(d=>d.id);
   const want=DECKS.some(d=>d.id===G.deck)?G.deck:DECKS[0].id;
@@ -884,14 +909,15 @@ async function decodeBackup(text){
 }
 
 function backupObject(){return {app:"jp-cards",v:2,at:Date.now(),data:JSON.parse(JSON.stringify(G))}}
+function schedulePush(){try{Sync.later()}catch(e){}}
 function stamp(){const d=new Date();return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}`}
 $("bkCopy").onclick=async()=>{
-  save();const code=await encodeBackup(backupObject());
+  persist();const code=await encodeBackup(backupObject());
   try{await navigator.clipboard.writeText(code);$("copyBox").hidden=true;toast("백업 코드를 복사했어요. 메모나 카톡 나와의 채팅에 붙여 넣어 보관하세요")}
   catch(e){$("copyText").value=code;$("copyBox").hidden=false;$("copyText").focus();$("copyText").select()}
 };
 $("bkFile").onclick=async()=>{
-  save();const code=await encodeBackup(backupObject());const name=`jp-cards-backup-${stamp()}.txt`;
+  persist();const code=await encodeBackup(backupObject());const name=`jp-cards-backup-${stamp()}.txt`;
   const file=new File([code],name,{type:"text/plain"});
   try{if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:"일본어 카드 백업"});return}}catch(e){if(e&&e.name==="AbortError")return}
   const a=document.createElement("a");a.href=URL.createObjectURL(file);a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1500);
@@ -910,11 +936,119 @@ $("restoreGo").onclick=async()=>{
       const s1=Object.assign({},obj.state);SETKEYS.forEach(k=>{if(k in s1){G.settings[k]=s1[k];delete s1[k]}});delete s1.v;
       G.decks[obj.deck||"travel"]=s1;G.deck=obj.deck||"travel";
     }else throw 0;
-    try{localStorage.setItem(KEY,JSON.stringify(G))}catch(e){}
+    persist();schedulePush();
     await loadDeck(DECKS.some(d=>d.id===G.deck)?G.deck:DECKS[0].id);
     $("restoreBox").hidden=true;$("restoreText").value="";renderHome();window.scrollTo(0,0);toast("기록을 불러왔어요. 이어서 공부하시면 돼요");
   }catch(e){toast("이 백업은 불러올 수 없어요. 코드가 잘리지 않았는지 확인해 주세요")}
 };
+/* ---------- auto sync: private GitHub gist ---------- */
+const Sync=(()=>{
+  const SK="jp-cards-sync",FILE="jp-cards-progress.json",API="https://api.github.com";
+  let cfg={};try{cfg=JSON.parse(localStorage.getItem(SK)||"{}")||{}}catch(e){}
+  let timer=null,busy=false,lastAt=cfg.lastAt||0,state="idle";
+  const on=()=>!!(cfg.token&&cfg.gist);
+  const keep=()=>{try{localStorage.setItem(SK,JSON.stringify(cfg))}catch(e){}};
+  const hdr=()=>({"Authorization":"Bearer "+cfg.token,"Accept":"application/vnd.github+json"});
+  async function api(path,opt={}){
+    const r=await fetch(API+path,Object.assign({cache:"no-store"},opt,{headers:Object.assign(hdr(),opt.headers||{})}));
+    if(r.status===401||r.status===403){state="auth";render();throw new Error("auth")}
+    if(!r.ok)throw new Error("http "+r.status);
+    return r.status===204?null:r.json();
+  }
+  function payload(){return JSON.stringify({app:"jp-cards",v:2,at:Date.now(),data:JSON.parse(JSON.stringify(G))})}
+  function merge(remote){
+    if(!remote||!remote.decks)return {changed:false,pushBack:false};
+    let changed=false,pushBack=false;
+    const ids=new Set([...Object.keys(remote.decks),...Object.keys(G.decks)]);
+    ids.forEach(id=>{
+      const r=remote.decks[id],l=G.decks[id];
+      const ru=(r&&r.updatedAt)||0,lu=(l&&l.updatedAt)||0;
+      if(ru>lu){G.decks[id]=r;changed=true}else if(lu>ru)pushBack=true;
+    });
+    if((remote.settingsAt||0)>(G.settingsAt||0)&&remote.settings){G.settings=Object.assign({},G.settings,remote.settings);G.settingsAt=remote.settingsAt;changed=true}
+    else if((G.settingsAt||0)>(remote.settingsAt||0))pushBack=true;
+    G.known=[...new Set([...(G.known||[]),...(remote.known||[])])];
+    return {changed,pushBack};
+  }
+  async function pull(atBoot){
+    if(!on()||!navigator.onLine||busy)return;
+    if(!atBoot&&!$("study").hidden)return;
+    busy=true;state="syncing";render();
+    try{
+      const g=await Promise.race([api("/gists/"+cfg.gist),new Promise((_,rej)=>setTimeout(()=>rej(new Error("slow")),atBoot?4000:12000))]);
+      const f=g.files&&g.files[FILE];let remote=null;
+      if(f){let txt=f.content;if(f.truncated&&f.raw_url){txt=await (await fetch(f.raw_url,{cache:"no-store"})).text()}remote=(JSON.parse(txt||"{}").data)||null}
+      const curDeck=atBoot?null:(DECK&&DECK.id);
+      const {changed,pushBack}=merge(remote);
+      if(changed){persist();if(!atBoot){
+        if(curDeck){openDeckState(curDeck);persist()}
+        if(!$("home").hidden)renderHome();
+        toast("다른 기기에서 공부한 기록을 가져왔어요");
+      }}
+      lastAt=Date.now();cfg.lastAt=lastAt;keep();state="ok";
+      busy=false;render();
+      if(pushBack||!remote)await push();
+    }catch(e){busy=false;if(state!=="auth")state=navigator.onLine?"error":"offline";render()}
+  }
+  async function push(){
+    if(!on()||!navigator.onLine)return;
+    if(busy){later();return}
+    busy=true;state="syncing";render();
+    try{
+      await api("/gists/"+cfg.gist,{method:"PATCH",body:JSON.stringify({files:{[FILE]:{content:payload()}}})});
+      lastAt=Date.now();cfg.lastAt=lastAt;keep();state="ok";
+    }catch(e){if(state!=="auth")state=navigator.onLine?"error":"offline"}
+    busy=false;render();
+  }
+  function later(){if(!on())return;clearTimeout(timer);timer=setTimeout(push,4000)}
+  function flush(){
+    if(!on()||!navigator.onLine||!timer)return;clearTimeout(timer);timer=null;
+    try{fetch(API+"/gists/"+cfg.gist,{method:"PATCH",keepalive:true,headers:hdr(),body:JSON.stringify({files:{[FILE]:{content:payload()}}})})}catch(e){}
+  }
+  async function connect(token){
+    cfg={token:token.trim()};
+    const u=await api("/user");cfg.user=u.login;
+    let gist=null;
+    for(let page=1;page<=5&&!gist;page++){
+      const list=await api(`/gists?per_page=100&page=${page}`);
+      gist=list.find(x=>x.files&&x.files[FILE]);if(list.length<100)break;
+    }
+    if(!gist)gist=await api("/gists",{method:"POST",body:JSON.stringify({description:"일본어 카드 진도 (자동 동기화)",public:false,files:{[FILE]:{content:payload()}}})});
+    cfg.gist=gist.id;keep();
+    await pull(false);
+  }
+  function disconnect(){cfg={};try{localStorage.removeItem(SK)}catch(e){};state="idle";render()}
+  function ago(t){if(!t)return "";const m=Math.round((Date.now()-t)/60000);if(m<1)return "방금";if(m<60)return m+"분 전";const h=Math.round(m/60);if(h<24)return h+"시간 전";return Math.round(h/24)+"일 전"}
+  function render(){
+    const el=$("syStatus");if(!el)return;
+    $("syOffRow").hidden=on();$("syOnRow").hidden=!on();$("syOff").hidden=!on();
+    if(!on()){el.innerHTML="휴대폰과 컴퓨터의 진도를 대표님 GitHub 계정의 비공개 메모장에 자동으로 맞춰 둬요. 기기마다 한 번씩만 켜 주면 돼요.";return}
+    const who=cfg.user?`${cfg.user} 계정과 `:"";
+    if(state==="auth")el.innerHTML=`<b class="warn">열쇠가 만료됐거나 권한이 없어요.</b> 새 열쇠를 만들어 다시 연결해 주세요. 그동안 기록은 이 기기에 안전하게 저장돼요.`;
+    else if(state==="syncing")el.innerHTML=`${who}맞추는 중이에요…`;
+    else if(state==="offline"||!navigator.onLine)el.innerHTML=`지금은 오프라인이에요. 인터넷에 연결되면 ${who}알아서 맞춰요.`;
+    else if(state==="error")el.innerHTML=`잠깐 연결이 안 됐어요. 다음에 앱을 열거나 카드를 넘길 때 다시 맞춰요.`;
+    else el.innerHTML=`<b>자동 동기화 켜짐.</b> ${who}${lastAt?ago(lastAt)+" ":""}맞췄어요. 카드를 넘기면 몇 초 뒤 저절로 올라가요.`;
+    if(state==="auth"){$("syOffRow").hidden=false;$("syOn").textContent="새 열쇠로 다시 연결"}else $("syOn").textContent="자동 동기화 켜기";
+  }
+  window.addEventListener("online",()=>{pull(false)});
+  window.addEventListener("offline",()=>{state="offline";render()});
+  document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="hidden")flush();else pull(false)});
+  setInterval(render,60000);
+  return {pull,push,later,connect,disconnect,render,on};
+})();
+$("syOn").onclick=()=>{$("syBox").hidden=false;$("syToken").focus()};
+$("syCancel").onclick=()=>{$("syBox").hidden=true};
+$("syNow").onclick=()=>{Sync.pull(false)};
+$("syOff").onclick=()=>{Sync.disconnect();toast("이 기기에서 자동 동기화를 껐어요. 기록은 그대로 남아 있어요")};
+$("syGo").onclick=async()=>{
+  const t=$("syToken").value.trim();if(!t){toast("열쇠를 붙여 넣어 주세요");return}
+  $("syGo").disabled=true;
+  try{await Sync.connect(t);$("syBox").hidden=true;$("syToken").value="";toast("자동 동기화를 켰어요")}
+  catch(e){Sync.disconnect();toast(e.message==="auth"?"열쇠가 맞지 않아요. gist 권한을 체크했는지 확인해 주세요":"연결하지 못했어요. 인터넷 연결을 확인하고 다시 시도해 주세요")}
+  $("syGo").disabled=false;
+};
+Sync.render();
 $("bkNote").textContent="백업 코드에는 모든 테마의 진도와 몰랐던 기록, 설정이 함께 담겨요.";
 
 boot();
